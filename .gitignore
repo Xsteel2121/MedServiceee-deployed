@@ -4,6 +4,7 @@ MedServiceee-main/node_modules/
 
 # Build outputs
 .next/
+out/
 MedServiceee-main/.next/
 dist/
 build/
