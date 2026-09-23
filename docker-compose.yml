@@ -1,0 +1,48 @@
+services:
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set}
+      POSTGRES_DB: ${DB_NAME:-medservice}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: always
+
+  meilisearch:
+    image: getmeili/meilisearch:v1.6
+    environment:
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY:?MEILI_MASTER_KEY must be set}
+      MEILI_NO_ANALYTICS: "true"
+    ports:
+      - "127.0.0.1:7700:7700"
+    volumes:
+      - meilisearch_data:/meili_data
+    restart: always
+
+  backend:
+    build: 
+      context: ./backend
+      dockerfile: Dockerfile
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://${DB_USER:-postgres}:${DB_PASSWORD:?DB_PASSWORD must be set}@db:5432/${DB_NAME:-medservice}
+      - MEILI_URL=http://meilisearch:7700
+      - MEILI_MASTER_KEY=${MEILI_MASTER_KEY:?MEILI_MASTER_KEY must be set}
+      - SECRET_KEY=${SECRET_KEY:?SECRET_KEY must be set}
+      - ADMIN_API_KEY=${ADMIN_API_KEY:?ADMIN_API_KEY must be set}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - ENABLE_EXTERNAL_AI_FALLBACK=${ENABLE_EXTERNAL_AI_FALLBACK:-false}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000}
+    depends_on:
+      - db
+      - meilisearch
+    restart: always
+
+volumes:
+  postgres_data:
+  meilisearch_data:

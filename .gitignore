@@ -1,0 +1,39 @@
+﻿# Dependencies
+node_modules/
+MedServiceee-main/node_modules/
+
+# Build outputs
+.next/
+MedServiceee-main/.next/
+dist/
+build/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+MedServiceee-main/backend/.venv/
+*.egg-info/
+
+# Database
+*.db
+*.sqlite
+MedServiceee-main/backend/medservice.db
+
+# Environment
+.env
+.env.local
+.env.production
+*.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Scripts temp
+fix_*.py
+patch_*.py
