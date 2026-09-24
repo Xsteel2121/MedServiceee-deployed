@@ -7,10 +7,10 @@ from sqlalchemy.orm import sessionmaker
 load_dotenv()
 SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./medservice.db")
 
-if os.getenv("VERCEL") == "1" and SQLALCHEMY_DATABASE_URL.startswith("sqlite:"):
+if (os.getenv("VERCEL") == "1" or os.getenv("ENVIRONMENT") == "production") and SQLALCHEMY_DATABASE_URL.startswith("sqlite:"):
     raise RuntimeError(
-        "DATABASE_URL must use a persistent PostgreSQL database on Vercel; "
-        "the serverless filesystem is temporary."
+        "DATABASE_URL must use persistent PostgreSQL in production; "
+        "SQLite is only for local development."
     )
 
 if SQLALCHEMY_DATABASE_URL.startswith("postgres://"):

@@ -36,6 +36,11 @@ ALLOWED_ORIGINS = [
     for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")
     if origin.strip()
 ]
+COOKIE_SAMESITE = os.getenv("COOKIE_SAMESITE", "lax").lower()
+if COOKIE_SAMESITE not in {"lax", "strict", "none"}:
+    raise RuntimeError("COOKIE_SAMESITE must be lax, strict, or none")
+if COOKIE_SAMESITE == "none" and os.getenv("ENVIRONMENT") != "production":
+    raise RuntimeError("Cross-site cookies require ENVIRONMENT=production and HTTPS")
 meili_client = meilisearch.Client(MEILI_URL, MEILI_MASTER_KEY) if MEILI_URL else None
 
 # Keep the existing data and add only missing schema pieces.
@@ -107,6 +112,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.middleware("http")
+async def reject_untrusted_browser_writes(request: Request, call_next):
+    """CORS alone does not prevent cross-site form POSTs with auth cookies."""
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+        origin = request.headers.get("origin")
+        if origin and origin not in ALLOWED_ORIGINS:
+            return Response(status_code=status.HTTP_403_FORBIDDEN)
+    return await call_next(request)
+
 def require_admin_key(x_admin_key: Optional[str] = Header(default=None)):
     if not ADMIN_API_KEY:
         raise HTTPException(status_code=503, detail="Admin API is not configured")
@@ -163,14 +177,19 @@ def login_for_access_token(
         value=access_token,
         httponly=True,
         secure=os.getenv("ENVIRONMENT", "development") == "production",
-        samesite="lax",
+        samesite=COOKIE_SAMESITE,
         max_age=int(access_token_expires.total_seconds()),
     )
     return {"access_token": access_token, "token_type": "bearer"}
 
 @app.post("/api/auth/logout", status_code=status.HTTP_204_NO_CONTENT)
 def logout(response: Response):
-    response.delete_cookie("access_token")
+    response.delete_cookie(
+        "access_token",
+        secure=os.getenv("ENVIRONMENT", "development") == "production",
+        httponly=True,
+        samesite=COOKIE_SAMESITE,
+    )
 
 @app.get("/api/auth/me", response_model=schemas.UserResponse)
 def read_users_me(current_user: models.User = Depends(get_current_user)):

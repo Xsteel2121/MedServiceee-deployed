@@ -28,6 +28,18 @@ class VerifiedFeaturesTest(unittest.TestCase):
                 return await client.request(method, path, **kwargs)
         return asyncio.run(run())
 
+    def test_untrusted_origin_cannot_write_with_cookies(self):
+        blocked = self.request(
+            "POST", "/api/auth/logout",
+            headers={"Origin": "https://untrusted.example"},
+        )
+        self.assertEqual(blocked.status_code, 403)
+        allowed = self.request(
+            "POST", "/api/auth/logout",
+            headers={"Origin": "http://localhost:3000"},
+        )
+        self.assertEqual(allowed.status_code, 204)
+
     def test_real_catalogue_and_filters(self):
         clinics = self.request("GET", "/api/clinics?city=Алматы")
         self.assertEqual(clinics.status_code, 200)

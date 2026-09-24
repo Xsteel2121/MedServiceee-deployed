@@ -71,6 +71,7 @@ export function AIChatWidget() {
       const res = await fetch(`${API_URL}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-AI-Session": aiSessionId },
+        credentials: "include",
         body: JSON.stringify({ message: userMessage })
       });
 

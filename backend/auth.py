@@ -6,8 +6,8 @@ from jose import JWTError, jwt
 import bcrypt
 
 SECRET_KEY = os.getenv("SECRET_KEY")
-if os.getenv("VERCEL") == "1" and (not SECRET_KEY or SECRET_KEY == "replace-with-a-long-random-secret"):
-    raise RuntimeError("SECRET_KEY must be configured in Vercel environment variables")
+if (os.getenv("VERCEL") == "1" or os.getenv("ENVIRONMENT") == "production") and (not SECRET_KEY or SECRET_KEY == "replace-with-a-long-random-secret"):
+    raise RuntimeError("SECRET_KEY must be configured in production environment variables")
 SECRET_KEY = SECRET_KEY or secrets.token_urlsafe(32)
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7 # 7 days for MVP convenience

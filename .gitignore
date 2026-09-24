@@ -42,3 +42,4 @@ fix_*.py
 patch_*.py
 .vercel
 .env*
+!**/.env.example
