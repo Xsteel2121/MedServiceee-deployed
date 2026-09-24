@@ -84,9 +84,15 @@ def get_optional_current_user(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    start_scheduler()
-    yield
-    stop_scheduler()
+    # Vercel Functions are short-lived; scheduled work belongs in a durable worker/cron.
+    is_serverless = os.getenv("VERCEL") == "1"
+    if not is_serverless:
+        start_scheduler()
+    try:
+        yield
+    finally:
+        if not is_serverless:
+            stop_scheduler()
 
 app = FastAPI(title="MedServicePrice API", version="1.0.0", lifespan=lifespan)
 
@@ -107,6 +113,11 @@ def require_admin_key(x_admin_key: Optional[str] = Header(default=None)):
 @app.get("/")
 def read_root():
     return {"message": "MedServicePrice API is running"}
+
+
+@app.get("/api/health")
+def health_check():
+    return {"status": "ok", "service": "medservice-api"}
 
 # --- Auth API ---
 @app.post("/api/auth/register", response_model=schemas.UserResponse)
