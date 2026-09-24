@@ -4,6 +4,7 @@ MedServiceee-main/node_modules/
 
 # Build outputs
 .next/
+.vercel/
 out/
 MedServiceee-main/.next/
 dist/
@@ -39,3 +40,5 @@ npm-debug.log*
 # Scripts temp
 fix_*.py
 patch_*.py
+.vercel
+.env*
