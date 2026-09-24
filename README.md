@@ -58,8 +58,8 @@
 - **Google Gemini Pro AI** — интеграция умного чат-бота.
 
 ### Деплой и Инфраструктура
-- **Vercel** — хостинг фронтенда.
-- **PS Cloud (регион Казахстан)** — хостинг бэкенда и PostgreSQL; см. [инструкцию](deploy/kz/README.md).
+- **PS Cloud (регион Казахстан)** — весь production-стек: Next.js, FastAPI и PostgreSQL; см. [инструкцию](deploy/kz/README.md).
+- **Vercel** — только проверочный preview интерфейса без доступа к данным пациентов.
 
 ---
 

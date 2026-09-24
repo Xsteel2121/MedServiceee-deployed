@@ -1,4 +1,12 @@
 services:
+  frontend:
+    build:
+      context: ../..
+      dockerfile: deploy/kz/frontend.Dockerfile
+    restart: unless-stopped
+    networks:
+      - private
+
   db:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -38,7 +46,7 @@ services:
     image: caddy:2-alpine
     restart: unless-stopped
     environment:
-      API_DOMAIN: ${API_DOMAIN:?Set API_DOMAIN in deploy/kz/.env}
+      SITE_DOMAIN: ${SITE_DOMAIN:?Set SITE_DOMAIN in deploy/kz/.env}
     ports:
       - "80:80"
       - "443:443"
@@ -49,6 +57,7 @@ services:
       - caddy_config:/config
     depends_on:
       - backend
+      - frontend
     networks:
       - private
 
