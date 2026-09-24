@@ -41,10 +41,13 @@ class VerifiedFeaturesTest(unittest.TestCase):
         self.assertEqual(doctors.status_code, 200)
         self.assertEqual(len(doctors.json()), 2)
         self.assertTrue(all(doctor["source_url"].startswith("https://emirmed.kz/") for doctor in doctors.json()))
+        self.assertEqual(len(self.request("GET", "/api/doctors?district=Алмалинский").json()), 3)
+        self.assertEqual(self.request("GET", "/api/doctors?district=Медеуский").json(), [])
 
         search = self.request("GET", "/api/search?q=Кардиолог&city=Алматы")
         self.assertEqual(search.status_code, 200)
         self.assertEqual(len(search.json()), 2)
+        self.assertTrue(all(result["clinics_count"] == 1 for result in search.json()))
         filtered = self.request("GET", "/api/search?q=Кардиолог&city=Алматы&max_price=10000")
         self.assertEqual(filtered.json(), [])
 

@@ -267,7 +267,7 @@ def search_services(
             service=service,
             avg_price=float(avg_price),
             min_price=float(min_service_price),
-            clinics_count=len(filtered_prices),
+            clinics_count=len({price.clinic_id for price in filtered_prices}),
             best_offer_clinic=best_price_obj.clinic,
             best_offer_price=float(best_price_obj.price_kzt),
             last_updated_at=best_price_obj.parsed_at
@@ -298,15 +298,18 @@ def consume_ai_quota(user: Optional[models.User], session_key: str, db: Session)
     """Atomically account for a chat request and return the remaining quota."""
 
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    if user and user.plan in {"pro", "premium"}:
-        return None
-
     if user:
+        # PostgreSQL serializes concurrent requests from the same account.
+        user = db.query(models.User).filter(models.User.id == user.id).with_for_update().populate_existing().one()
+        if user.plan in {"pro", "premium"}:
+            db.rollback()
+            return None
         period_started = user.ai_usage_period_started_at
         if not period_started or now - period_started >= timedelta(days=30):
             user.ai_requests_used = 0
             user.ai_usage_period_started_at = now
         if user.ai_requests_used >= FREE_AI_LIMIT:
+            db.rollback()
             raise HTTPException(
                 status_code=429,
                 detail={
@@ -320,11 +323,17 @@ def consume_ai_quota(user: Optional[models.User], session_key: str, db: Session)
         db.commit()
         return FREE_AI_LIMIT - user.ai_requests_used
 
-    usage = db.query(models.AIUsage).filter(models.AIUsage.session_key == session_key).first()
+    usage_query = db.query(models.AIUsage).filter(models.AIUsage.session_key == session_key).with_for_update()
+    usage = usage_query.first()
     if not usage:
         usage = models.AIUsage(session_key=session_key, requests_used=0, period_started_at=now)
         db.add(usage)
-        db.flush()
+        try:
+            db.flush()
+        except IntegrityError:
+            # Another request created the anonymous session at the same time.
+            db.rollback()
+            usage = usage_query.populate_existing().one()
     elif now - usage.period_started_at >= timedelta(days=30):
         usage.requests_used = 0
         usage.period_started_at = now
@@ -435,6 +444,7 @@ def read_clinics(
 def read_doctors(
     specialty: Optional[str] = None,
     city: Optional[str] = None,
+    district: Optional[str] = None,
     language: Optional[str] = None,
     min_rating: Optional[float] = Query(None, ge=0, le=5),
     min_price: Optional[float] = Query(None, ge=0),
@@ -449,6 +459,8 @@ def read_doctors(
         query = query.filter(models.Doctor.specialty.ilike(f"%{specialty.strip()}%"))
     if city:
         query = query.filter(models.Clinic.city.ilike(city.strip()))
+    if district:
+        query = query.filter(models.Clinic.district.ilike(district.strip()))
     if language:
         query = query.filter(models.Doctor.languages.ilike(f"%{language.strip()}%"))
     if min_rating is not None:
@@ -654,6 +666,23 @@ def read_my_bookings(
     return db.query(models.Booking).filter(
         models.Booking.patient_id == current_user.id,
     ).order_by(models.Booking.priority_booking.desc(), models.Booking.appointment_at.asc(), models.Booking.created_at.desc()).all()
+
+
+@app.get("/api/admin/bookings", response_model=List[schemas.BookingResponse], dependencies=[Depends(require_admin_key)])
+def read_booking_queue(
+    clinic_id: Optional[str] = None,
+    limit: int = Query(100, ge=1, le=200),
+    db: Session = Depends(get_db),
+):
+    """Operational queue: PREMIUM requests are presented first to staff."""
+    query = db.query(models.Booking)
+    if clinic_id:
+        query = query.filter(models.Booking.clinic_id == clinic_id)
+    return query.order_by(
+        models.Booking.priority_booking.desc(),
+        models.Booking.appointment_at.asc(),
+        models.Booking.created_at.asc(),
+    ).limit(limit).all()
 
 
 @app.post("/api/bookings", response_model=schemas.BookingResponse, status_code=status.HTTP_201_CREATED)
