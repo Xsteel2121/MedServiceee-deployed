@@ -11,11 +11,14 @@ website must not point to hosting abroad; see
    Point its A/AAAA record to the Kazakhstan server. Do not proxy it through
    an overseas CDN. Set `SITE_DOMAIN=medserviceee.kz` and
    `CORS_ORIGINS=https://medserviceee.kz`.
-3. Create `deploy/kz/.env` from `.env.example`, replace every placeholder,
+3. Clone `https://github.com/Xsteel2121/MedServiceee-deployed.git` onto that
+   server. Create `deploy/kz/.env` from `.env.example`, replace every placeholder,
    keep it out of Git, and restrict file access. Use independent random secrets.
    The password in `DATABASE_URL` must be the same as `DB_PASSWORD` and URL-safe.
 4. From `deploy/kz`, run `docker compose --env-file .env up -d --build`.
    Allow inbound TCP 80/443 for Caddy HTTPS; do not expose PostgreSQL or 8000.
+   For subsequent releases, run `git pull --ff-only` from the repository root
+   and then rebuild this stack. Never commit the server's `.env` file.
 5. Verify `https://medserviceee.kz/`, `/api/health` and `/api/clinics`.
    The browser uses same-origin `/api` calls. Confirm registration, login,
    profile and chat in a real browser before inviting patients.
