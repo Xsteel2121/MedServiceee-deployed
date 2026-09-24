@@ -98,7 +98,7 @@ python migrations.py
 python seed_features.py
 ```
 
-The feature seed adds valid `WELCOME10` and `MEDKZ500` promo codes and enriches existing clinic/doctor records without dropping data.
+The seed now adds only a verified ЭМИРМЕД branch and three physicians published on the clinic's own site. Source URLs are stored in the database. It does **not** generate doctors, ratings, appointment availability, or promo codes. Promotions require a documented clinic offer; online booking requires the clinic to supply real slots. Unconnected clinics link to their official booking page.
 
 ---
 *Сделано с ❤️ для Хакатона.*

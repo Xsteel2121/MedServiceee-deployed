@@ -3,13 +3,10 @@
 import os
 import re
 from sqlalchemy.orm import Session
+from sqlalchemy import or_
 import models
-import meilisearch
 from logger import ai_logger
 
-MEILI_URL = os.getenv("MEILI_URL", "http://meilisearch:7700")
-MEILI_MASTER_KEY = os.getenv("MEILI_MASTER_KEY", "")
-meili_client = meilisearch.Client(MEILI_URL, MEILI_MASTER_KEY)
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
@@ -17,20 +14,23 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 def detect_language(text: str) -> str:
     text = text.lower().strip()
     kz_chars = set("әіңғүұқөһ")
-    ru_chars = set("абвгдеёжзийклмнопрстуфхцчшщъыьэюя")
-    if any(c in kz_chars for c in text): return "kz"
-    ru_count = sum(1 for c in text if c in ru_chars)
-    return "kz" if ru_count == 0 and any(c.isalpha() for c in text) else "ru"
+    if any(c in kz_chars for c in text):
+        return "kz"
+    words = set(text.replace("?", " ").replace(",", " ").split())
+    if words.intersection({"салем", "кайда", "кайсы", "калай", "керек", "менде", "жазылу", "туралы", "болады"}):
+        return "kz"
+    return "ru"
 
 
 def system_prompt_for(language: str) -> str:
     language_name = "қазақ тілінде" if language == "kz" else "на русском языке"
+    disclaimer = "Диагноз болып табылмайды. Жағдай нашарласа, дәрігерге немесе 103 қызметіне жүгініңіз." if language == "kz" else "Не является диагнозом. При ухудшении состояния обратитесь к врачу или позвоните 103."
     return f"""Ты — медицинский AI-ассистент MedServicePrice.kz. Отвечай только {language_name}, на языке последнего сообщения пользователя.
 
 Правила:
 1. Помогай искать реальные клиники, услуги и врачей из переданной базы. Не выдумывай цены, адреса и доступность.
 2. При симптомах объясняй возможные причины только как ориентир, рекомендуй подходящую специальность и первичные обследования.
-3. Всегда добавляй предупреждение: «Не является диагнозом. При ухудшении состояния обратитесь к врачу или в экстренную службу».
+3. При обсуждении симптомов всегда добавляй предупреждение на языке пользователя: «{disclaimer}».
 4. Не назначай лечение и рецептурные препараты. При опасных симптомах советуй срочно обратиться за медицинской помощью.
 5. Пиши кратко, понятными пунктами, без стандартного приветствия.
 """
@@ -78,16 +78,21 @@ def analyze_symptoms(message: str, language: str = "ru"):
     if not rule:
         return None
     is_kz = language == "kz"
+    heart_warning = rule["specialty"] == "Кардиолог"
     return {
         "specialty": rule["specialty"],
         "possible_causes": rule["causes_kz" if is_kz else "causes_ru"],
         "recommended_examinations": rule["tests_kz" if is_kz else "tests_ru"],
-        "disclaimer": "Диагноз болып табылмайды. Жағдай нашарласа, дәрігерге немесе жедел жәрдемге жүгініңіз." if is_kz else "Не является диагнозом. При ухудшении состояния обратитесь к врачу или в экстренную службу.",
+        "disclaimer": "Диагноз болып табылмайды. Жағдай нашарласа, дәрігерге немесе 103 қызметіне жүгініңіз." if is_kz else "Не является диагнозом. При ухудшении состояния обратитесь к врачу или позвоните 103.",
+        "urgent_warning": ("Кеуде ауыруы немесе қатты ентігу кенет басталса, қазір 103 нөміріне қоңырау шалыңыз." if is_kz else "Если боль в груди или сильная одышка возникли внезапно, немедленно позвоните 103.") if heart_warning else None,
     }
 
 
 def recommend_doctors(specialty: str, city: str, db: Session):
-    query = db.query(models.Doctor).join(models.Clinic).filter(models.Doctor.specialty.ilike(f"%{specialty}%"))
+    search_terms = ["ЛОР", "Оториноларинголог"] if specialty == "Отоларинголог (ЛОР)" else [specialty]
+    query = db.query(models.Doctor).join(models.Clinic).filter(
+        or_(*(models.Doctor.specialty.ilike(f"%{term}%") for term in search_terms))
+    )
     if city:
         query = query.filter(models.Clinic.city.ilike(f"%{city}%"))
     return query.order_by(models.Doctor.rating.desc(), models.Doctor.reviews_count.desc()).limit(3).all()
@@ -129,39 +134,18 @@ def extract_service_keyword(text: str, db: Session) -> str:
     return None
 
 def get_best_clinic_for_service(service_name: str, city: str, db: Session):
-    try:
-        search_res = meili_client.index('services').search(service_name, {'limit': 5})
-        hits = search_res.get('hits', [])
-        if not hits: return None, None
-        best_price_obj = None
-        best_score = -1
-        found_service = None
-        for hit in hits:
-            service_id = hit['id']
-            service = db.query(models.Service).filter(models.Service.id == service_id).first()
-            if not service: continue
-            prices_query = db.query(models.Price).filter(models.Price.service_id == service_id)
-            if city: prices_query = prices_query.join(models.Clinic).filter(models.Clinic.city.ilike(f"%{city}%"))
-            prices = prices_query.all()
-            if not prices: continue
-            found_service = service
-            prices_list = [float(p.price_kzt) for p in prices]
-            min_price = min(prices_list)
-            max_price = max(prices_list)
-            for p in prices:
-                rating = float(p.clinic.rating) if p.clinic.rating else 4.5
-                price_val = float(p.price_kzt)
-                norm_rating = rating / 5.0
-                norm_price = 1.0 - ((price_val - min_price) / (max_price - min_price)) if max_price > min_price else 1.0
-                score = (norm_rating * 0.6) + (norm_price * 0.4)
-                if score > best_score:
-                    best_score = score
-                    best_price_obj = p
-            if best_price_obj: break
-        return found_service, best_price_obj
-    except Exception as exc:
-        ai_logger.warning("Clinic recommendation error: %s", exc, exc_info=True)
-        return None, None
+    from datetime import datetime, timedelta, timezone
+
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=30)
+    query = db.query(models.Price).join(models.Service).join(models.Clinic).filter(
+        models.Price.is_active.is_(True),
+        models.Price.parsed_at >= cutoff,
+        or_(models.Service.name_raw.ilike(f"%{service_name}%"), models.Service.name_norm.ilike(f"%{service_name}%")),
+    )
+    if city:
+        query = query.filter(models.Clinic.city.ilike(f"%{city}%"))
+    best = query.order_by(models.Price.price_kzt.asc()).first()
+    return (best.service, best) if best else (None, None)
 
 def get_top_clinics_in_city(city: str, db: Session):
     return db.query(models.Clinic).filter(models.Clinic.city.ilike(f"%{city}%")).order_by(models.Clinic.rating.desc()).limit(3).all()
@@ -222,7 +206,7 @@ def ask_gemini(message: str, db: Session, language: str = "ru") -> str:
     # deployments, but use the strict bilingual prompt for every new request.
     system_prompt = system_prompt_for(language)
     context = build_db_context(db)
-    full_prompt = f"{system_prompt}\n\n{context}\n\nВопрос клиента: {message}"
+    full_prompt = f"{system_prompt}\n\n{context}\n\n{'Пайдаланушы сұрағы' if language == 'kz' else 'Вопрос клиента'}: {message}"
     
     try:
         from google import genai
@@ -269,8 +253,8 @@ def generate_ai_response(message: str, db: Session, language: str | None = None)
         if city:
             clinics = get_top_clinics_in_city(city, db)
             if clinics:
-                response = f"**{city}** қаласындағы үздік клиникалар:\n" if lang == "kz" else f"Лучшие клиники в городе **{city}**:\n"
-                for c in clinics: response += f"- 🏥 **[{c.name}](/clinics/{c.id})** (⭐ {c.rating}/5.0)\n"
+                response = f"**{city}** қаласындағы клиникалар:\n" if lang == "kz" else f"Клиники в городе **{city}**:\n"
+                for c in clinics: response += f"- 🏥 **[{c.name}](/clinics/{c.id})**\n"
                 return response
             else:
                 return f"Кешіріңіз, **{city}** қаласында әзірге клиникалар жоқ." if lang == "kz" else f"Извините, в городе **{city}** пока нет клиник."

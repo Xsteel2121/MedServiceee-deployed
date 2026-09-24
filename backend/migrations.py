@@ -18,7 +18,8 @@ ADDITIVE_COLUMNS = {
         "has_active_promotion": "BOOLEAN DEFAULT FALSE",
     },
     "doctors": {
-        "languages": "TEXT DEFAULT 'ru,kk'",
+        "languages": "TEXT",
+        "source_url": "VARCHAR",
     },
     "users": {
         "full_name": "VARCHAR",
@@ -33,6 +34,15 @@ ADDITIVE_COLUMNS = {
         "discount_amount": "NUMERIC(10, 2) DEFAULT 0",
         "total_amount": "NUMERIC(10, 2)",
         "priority_booking": "BOOLEAN DEFAULT FALSE",
+    },
+    "prices": {
+        "doctor_id": "VARCHAR",
+        "source_url": "VARCHAR",
+    },
+    "promo_codes": {
+        "title": "VARCHAR",
+        "description": "TEXT",
+        "source_url": "VARCHAR",
     },
 }
 

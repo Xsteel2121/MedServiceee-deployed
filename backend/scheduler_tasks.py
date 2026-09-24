@@ -86,10 +86,9 @@ scheduler = BackgroundScheduler()
 
 def start_scheduler() -> None:
     """Start the APScheduler background scheduler."""
-    scheduler.add_job(run_parsers_and_index, 'cron', hour=3, minute=0)
     scheduler.add_job(cleanup_old_data, 'cron', day_of_week='sun', hour=4, minute=0) # Weekly cleanup
     scheduler.start()
-    scheduler_logger.info("APScheduler started: Parsers run daily at 03:00, Cleanup runs Sundays at 04:00.")
+    scheduler_logger.info("APScheduler started: cleanup runs Sundays at 04:00; unverified parsers are disabled.")
 
 
 def stop_scheduler() -> None:

@@ -9,6 +9,7 @@ import { build2GisRouteUrl, load2GisSdk, loadGoogleMapsSdk } from "@/lib/maps";
 interface MapComponentProps {
   clinics: Clinic[];
   selectedClinicId?: string | null;
+  selectionVersion?: number;
 }
 
 interface Clinic {
@@ -31,7 +32,7 @@ const clinicPin = L.divIcon({
   popupAnchor: [0, -16],
 });
 
-export default function MapComponent({ clinics, selectedClinicId }: MapComponentProps) {
+export default function MapComponent({ clinics, selectedClinicId, selectionVersion }: MapComponentProps) {
   const { locale } = useTranslation();
   const mapRef = useRef<HTMLDivElement>(null);
   const leafletMap = useRef<L.Map | null>(null);
@@ -124,7 +125,7 @@ export default function MapComponent({ clinics, selectedClinicId }: MapComponent
     if (!selected) return;
     leafletMap.current.flyTo([selected.lat, selected.lng], 16, { animate: true, duration: 0.8 });
     selected.marker.openPopup();
-  }, [selectedClinicId, clinics]);
+  }, [selectedClinicId, clinics, selectionVersion]);
 
   return <div ref={mapRef} className="w-full h-full min-h-[400px] rounded-xl z-0 relative" />;
 }

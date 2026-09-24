@@ -15,6 +15,8 @@ export interface Doctor {
   photo?: string | null;
   languages?: string[];
   description?: string | null;
+  source_url?: string | null;
+  clinic_has_online_booking?: boolean;
 }
 
 export interface Clinic {

@@ -28,6 +28,7 @@ interface DynamicMapProps {
     reviews_count?: number | null;
   }>;
   selectedClinicId?: string | null;
+  selectionVersion?: number;
 }
 
 export default function DynamicMapWrapper(props: DynamicMapProps) {

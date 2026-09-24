@@ -5,7 +5,10 @@ from typing import Optional
 from jose import JWTError, jwt
 import bcrypt
 
-SECRET_KEY = os.getenv("SECRET_KEY") or secrets.token_urlsafe(32)
+SECRET_KEY = os.getenv("SECRET_KEY")
+if os.getenv("VERCEL") == "1" and (not SECRET_KEY or SECRET_KEY == "replace-with-a-long-random-secret"):
+    raise RuntimeError("SECRET_KEY must be configured in Vercel environment variables")
+SECRET_KEY = SECRET_KEY or secrets.token_urlsafe(32)
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7 # 7 days for MVP convenience
 

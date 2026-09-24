@@ -20,3 +20,10 @@ requests. For local development it continues to use `http://localhost:8000`.
 
 The in-process APScheduler is disabled on Vercel Functions; scheduled parsing
 and cleanup require a durable worker or an external cron trigger.
+
+The seed contains one verified clinic and three published physicians. Their
+source URLs are saved with the records. The clinic's live calendar is not
+connected: its booking button opens its official site, and the API publishes
+no invented appointment slots. Promo codes are empty until an administrator
+adds a clinic-approved offer. PRO/PREMIUM cannot be self-assigned through the
+public API; payment and a verified upgrade workflow are still required.

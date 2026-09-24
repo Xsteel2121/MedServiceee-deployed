@@ -14,8 +14,10 @@ export default function ClinicsPage() {
   const { t, locale } = useTranslation();
   const [clinics, setClinics] = useState<Clinic[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
   const [selectedCity, setSelectedCity] = useState("Алматы");
   const [selectedClinicId, setSelectedClinicId] = useState<string | null>(null);
+  const [selectionVersion, setSelectionVersion] = useState(0);
   const [expandedClinicId, setExpandedClinicId] = useState<string | null>(null);
   const [clinicDoctors, setClinicDoctors] = useState<Record<string, Doctor[]>>({});
   const [loadingDoctors, setLoadingDoctors] = useState<Record<string, boolean>>({});
@@ -48,8 +50,10 @@ export default function ClinicsPage() {
   const CITIES = ["Алматы", "Астана", "Шымкент", "Караганда", "Актобе", "Павлодар"];
 
   useEffect(() => {
+    const controller = new AbortController();
     async function fetchClinics() {
       setLoading(true);
+      setLoadError("");
       try {
         const params = new URLSearchParams();
         if (selectedCity) params.set("city", selectedCity);
@@ -57,18 +61,21 @@ export default function ClinicsPage() {
         if (minRating > 0) params.set("min_rating", String(minRating));
         if (onlineOnly) params.set("online_booking", "true");
         const url = `${API_URL}/api/clinics?${params.toString()}`;
-        const res = await fetch(url);
-        if (res.ok) {
-          const data = await res.json();
-          setClinics(data);
+        const res = await fetch(url, { signal: controller.signal });
+        if (!res.ok) throw new Error("Не удалось загрузить клиники");
+        const data = await res.json();
+        if (!controller.signal.aborted) setClinics(data);
+      } catch (err: unknown) {
+        if (!controller.signal.aborted) {
+          setClinics([]);
+          setLoadError(err instanceof Error ? err.message : "Не удалось загрузить клиники");
         }
-      } catch (err) {
-        console.error("Failed to fetch clinics", err);
       } finally {
-        setLoading(false);
+        if (!controller.signal.aborted) setLoading(false);
       }
     }
-    fetchClinics();
+    void fetchClinics();
+    return () => controller.abort();
   }, [selectedCity, clinicQuery, minRating, onlineOnly]);
 
   const distance = (clinic: Clinic) => {
@@ -149,7 +156,7 @@ export default function ClinicsPage() {
         <div className="bg-card border border-border rounded-2xl shadow-sm overflow-hidden flex flex-col h-full order-2 lg:order-1">
           <div className="p-4 border-b border-border bg-muted/30">
             <h2 className="font-semibold text-lg">
-              {locale === 'en' ? 'Clinics list' : (locale === 'kk' ? 'Клиникалар тізімі' : 'Список клиник')} ({clinics.length})
+              {locale === 'en' ? 'Clinics list' : (locale === 'kk' ? 'Клиникалар тізімі' : 'Список клиник')} ({displayedClinics.length})
             </h2>
           </div>
 
@@ -157,10 +164,10 @@ export default function ClinicsPage() {
             {loading ? (
               <div className="p-8 text-center text-muted-foreground">{locale === 'en' ? 'Loading...' : (locale === 'kk' ? 'Жүктелуде...' : 'Загрузка клиник...')}</div>
             ) : clinics.length === 0 ? (
-              <div className="p-8 text-center text-muted-foreground">{locale === 'en' ? 'No clinics found' : (locale === 'kk' ? 'Клиникалар табылмады' : 'Клиники не найдены')}</div>
+              <div className="p-8 text-center text-muted-foreground">{loadError || (locale === 'en' ? 'No clinics found' : (locale === 'kk' ? 'Клиникалар табылмады' : 'Клиники не найдены'))}</div>
             ) : (
               displayedClinics.map((clinic) => (
-                <div key={clinic.id} onClick={() => setSelectedClinicId(clinic.id)} className={`p-4 rounded-xl border border-border hover:border-primary/50 hover:bg-muted/30 transition-colors cursor-pointer group ${selectedClinicId === clinic.id ? 'border-primary bg-muted/30' : ''}`}>
+                <div key={clinic.id} onClick={() => { setSelectedClinicId(clinic.id); setSelectionVersion(value => value + 1); }} className={`p-4 rounded-xl border border-border hover:border-primary/50 hover:bg-muted/30 transition-colors cursor-pointer group ${selectedClinicId === clinic.id ? 'border-primary bg-muted/30' : ''}`}>
                   <div className="flex items-center justify-between mb-1">
                     <h3 className="font-medium text-lg group-hover:text-primary transition-colors">{clinic.name}</h3>
                     <div className="flex items-center text-amber-500 text-sm font-medium">
@@ -187,7 +194,7 @@ export default function ClinicsPage() {
                     )}
                   </div>
                   <div className="mt-4 flex gap-2">
-                    <Button size="sm" variant="outline" className="w-full text-xs h-8" onClick={(e) => { e.stopPropagation(); setSelectedClinicId(clinic.id); void toggleDoctors(clinic.id); }}>
+                    <Button size="sm" variant="outline" className="w-full text-xs h-8" onClick={(e) => { e.stopPropagation(); setSelectedClinicId(clinic.id); setSelectionVersion(value => value + 1); void toggleDoctors(clinic.id); }}>
                       {locale === 'en' ? 'Details' : (locale === 'kk' ? 'Толығырақ' : 'Подробнее')}
                     </Button>
                     <Button variant="default" size="sm" className="w-full text-xs bg-primary/10 text-primary hover:bg-primary hover:text-white border-0 shadow-none" onClick={(e) => { e.stopPropagation(); openRoute(clinic, "2gis"); }}>
@@ -216,8 +223,8 @@ export default function ClinicsPage() {
                                 <h6 className="text-sm font-bold">{doc.first_name} {doc.last_name}</h6>
                                 <p className="text-xs text-primary mb-1">{doc.specialty}</p>
                                 <div className="flex justify-between items-center text-xs">
-                                  <span className="text-muted-foreground">{doc.experience_years} лет</span>
-                                  <span className="font-semibold">{doc.consultation_price} ₸</span>
+                                  <span className="text-muted-foreground">{doc.experience_years != null ? `${doc.experience_years} лет` : "Стаж уточняйте"}</span>
+                                  <span className="font-semibold">{doc.consultation_price != null ? `${doc.consultation_price} ₸` : "Цена по запросу"}</span>
                                 </div>
                               </div>
                             </div>
@@ -236,7 +243,7 @@ export default function ClinicsPage() {
 
         {/* Map */}
         <div className="lg:col-span-2 rounded-2xl overflow-hidden border border-border shadow-sm h-[400px] lg:h-full order-1 lg:order-2 z-0 relative">
-          <DynamicMap clinics={clinics} selectedClinicId={selectedClinicId} />
+          <DynamicMap clinics={clinics} selectedClinicId={selectedClinicId} selectionVersion={selectionVersion} />
         </div>
       </div>
       <DoctorProfileModal

@@ -3,13 +3,14 @@
 from fastapi import Cookie, FastAPI, Depends, Header, HTTPException, Query, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from sqlalchemy import func, or_, and_
+from sqlalchemy import func, or_, and_, update
 from sqlalchemy.exc import IntegrityError
 from typing import List, Optional
 import os
 from contextlib import asynccontextmanager
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from datetime import timedelta, datetime, timezone
+from zoneinfo import ZoneInfo
 from jose import JWTError, jwt
 import hmac
 
@@ -19,6 +20,7 @@ import meilisearch
 from scheduler_tasks import start_scheduler, stop_scheduler
 import chat_ai
 from migrations import ensure_schema
+from seed_verified_data import seed_verified_data
 from pydantic import BaseModel, Field
 from logger import api_logger
 
@@ -26,7 +28,7 @@ class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=2000)
     language: Optional[str] = Field(default=None, pattern="^(ru|kz)$")
 
-MEILI_URL = os.getenv("MEILI_URL", "http://meilisearch:7700")
+MEILI_URL = os.getenv("MEILI_URL", "")
 MEILI_MASTER_KEY = os.getenv("MEILI_MASTER_KEY", "")
 ADMIN_API_KEY = os.getenv("ADMIN_API_KEY")
 ALLOWED_ORIGINS = [
@@ -34,10 +36,11 @@ ALLOWED_ORIGINS = [
     for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")
     if origin.strip()
 ]
-meili_client = meilisearch.Client(MEILI_URL, MEILI_MASTER_KEY)
+meili_client = meilisearch.Client(MEILI_URL, MEILI_MASTER_KEY) if MEILI_URL else None
 
 # Keep the existing data and add only missing schema pieces.
 ensure_schema()
+seed_verified_data()
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
 
@@ -189,13 +192,14 @@ def search_services(
     sort_by: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
-    try:
-        search_res = meili_client.index('services').search(q, {'limit': 20})
-        hits = search_res.get('hits', [])
-        if not hits:
-            raise RuntimeError("Meilisearch returned no hits")
-    except Exception as exc:
-        api_logger.warning("Meilisearch unavailable, using database search: %s", exc)
+    hits = []
+    if meili_client:
+        try:
+            search_res = meili_client.index('services').search(q, {'limit': 20})
+            hits = search_res.get('hits', [])
+        except Exception as exc:
+            api_logger.warning("Meilisearch unavailable, using database search: %s", exc)
+    if not hits:
         matching_services = db.query(models.Service).filter(
             or_(
                 models.Service.name_raw.ilike(f"%{q}%"),
@@ -220,14 +224,6 @@ def search_services(
             models.Price.parsed_at.is_not(None),
             models.Price.parsed_at >= thirty_days_ago
         ).all()
-        # Fallback to all available prices if no recent ones exist
-        if not prices:
-            prices = db.query(models.Price).filter(
-                models.Price.service_id == service_id,
-                models.Price.is_active.is_(True),
-                models.Price.parsed_at.is_not(None),
-            ).all()
-        
         filtered_prices = []
         for p in prices:
             # Apply city filter
@@ -243,7 +239,7 @@ def search_services(
                 continue
             if has_promotion is not None and bool(p.clinic.has_active_promotion) != has_promotion:
                 continue
-            clinic_doctors = p.clinic.doctors or []
+            clinic_doctors = [p.doctor] if p.doctor else (p.clinic.doctors or [])
             if specialty and not any(specialty.casefold() in (doctor.specialty or "").casefold() for doctor in clinic_doctors):
                 continue
             if language and not any(language.casefold() in (doctor.languages or "").casefold() for doctor in clinic_doctors):
@@ -289,12 +285,10 @@ def search_services(
 
 @app.post("/api/admin/trigger-parser", dependencies=[Depends(require_admin_key)])
 def trigger_parser():
-    import threading
-    from scheduler_tasks import run_parsers_and_index
-    # Run in background to not block the API
-    t = threading.Thread(target=run_parsers_and_index)
-    t.start()
-    return {"message": "Parsers started in background."}
+    raise HTTPException(
+        status_code=503,
+        detail="No verified live parser is configured; catalogue data was not modified",
+    )
 
 
 FREE_AI_LIMIT = 20
@@ -370,6 +364,8 @@ def chat_with_ai(
         reply = chat_ai.generate_ai_response(req.message, db, language=language)
         triage = chat_ai.analyze_symptoms(req.message, language=language)
         if triage:
+            if triage.get("urgent_warning"):
+                reply = f"⚠️ {triage['urgent_warning']}\n\n{reply}"
             if language == "kz":
                 reply = f"{reply}\n\nБолжамды себептер: {', '.join(triage['possible_causes'])}.\nАлғашқы тексерулер: {', '.join(triage['recommended_examinations'])}.\n\n⚠️ {triage['disclaimer']}"
             else:
@@ -384,9 +380,11 @@ def chat_with_ai(
                     "specialty": doctor.specialty,
                     "clinic_id": doctor.clinic_id,
                     "clinic_name": doctor.clinic.name if doctor.clinic else None,
-                    "price": float(doctor.consultation_price or 0),
+                    "price": float(doctor.consultation_price) if doctor.consultation_price is not None else None,
                     "rating": doctor.rating,
                     "photo_url": doctor.photo_url,
+                    "source_url": doctor.source_url,
+                    "clinic_has_online_booking": doctor.clinic_has_online_booking,
                 }
                 for doctor in chat_ai.recommend_doctors(triage["specialty"], city, db)
             ]
@@ -500,14 +498,70 @@ def read_prices_for_service(service_id: str, city: Optional[str] = None, db: Ses
     return query.all()
 
 
-def _active_promo(code: str, clinic_id: Optional[str], db: Session):
+@app.get("/api/promocodes/public", response_model=List[schemas.PublicPromotion])
+def read_public_promotions(db: Session = Depends(get_db)):
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    promo = db.query(models.PromoCode).filter(
+    promos = db.query(models.PromoCode).join(models.Clinic).filter(
+        models.PromoCode.is_active.is_(True),
+        models.PromoCode.title.isnot(None),
+        models.PromoCode.source_url.isnot(None),
+        or_(models.PromoCode.starts_at.is_(None), models.PromoCode.starts_at <= now),
+        or_(models.PromoCode.expires_at.is_(None), models.PromoCode.expires_at >= now),
+        or_(models.PromoCode.usage_limit.is_(None), models.PromoCode.used_count < models.PromoCode.usage_limit),
+    ).order_by(models.PromoCode.expires_at.asc()).all()
+    return [schemas.PublicPromotion(
+        code=promo.code,
+        title=promo.title,
+        description=promo.description or "",
+        clinic_name=promo.clinic.name,
+        city=promo.clinic.city,
+        expires_at=promo.expires_at,
+        source_url=promo.source_url,
+    ) for promo in promos]
+
+
+@app.post("/api/admin/promocodes", status_code=201)
+def create_promocode(
+    payload: schemas.PromoCodeCreate,
+    x_admin_key: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    if not ADMIN_API_KEY or not x_admin_key or not hmac.compare_digest(x_admin_key, ADMIN_API_KEY):
+        raise HTTPException(status_code=403, detail="Требуется ключ администратора")
+    clinic = db.get(models.Clinic, payload.clinic_id)
+    if not clinic or not clinic.has_online_booking:
+        raise HTTPException(status_code=400, detail="Клиника не подключила онлайн-запись")
+    if payload.discount_type == "percent" and payload.discount_value > 100:
+        raise HTTPException(status_code=422, detail="Процент скидки не может превышать 100")
+    if payload.starts_at and payload.expires_at and payload.starts_at >= payload.expires_at:
+        raise HTTPException(status_code=422, detail="Некорректный срок акции")
+    values = payload.model_dump()
+    for field in ("starts_at", "expires_at"):
+        value = values[field]
+        if value and value.tzinfo:
+            values[field] = value.astimezone(timezone.utc).replace(tzinfo=None)
+    values["code"] = values["code"].strip().upper()
+    promo = models.PromoCode(**values)
+    db.add(promo)
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Промокод уже существует") from exc
+    return {"id": promo.id, "code": promo.code}
+
+
+def _active_promo(code: str, clinic_id: Optional[str], db: Session, *, for_update: bool = False):
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    query = db.query(models.PromoCode).filter(
         func.upper(models.PromoCode.code) == code.strip().upper(),
         models.PromoCode.is_active.is_(True),
         or_(models.PromoCode.starts_at.is_(None), models.PromoCode.starts_at <= now),
         or_(models.PromoCode.expires_at.is_(None), models.PromoCode.expires_at >= now),
-    ).first()
+    )
+    if for_update:
+        query = query.with_for_update()
+    promo = query.first()
     if not promo:
         raise HTTPException(status_code=400, detail="Промокод недействителен или истёк")
     if promo.usage_limit is not None and promo.used_count >= promo.usage_limit:
@@ -551,19 +605,45 @@ def read_doctor_slots(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Дата должна быть в формате YYYY-MM-DD") from exc
 
-    start = datetime.combine(selected_date, datetime.min.time()).replace(hour=9)
-    slots = [start + timedelta(minutes=30 * index) for index in range(18)]
-    booked = {
-        booking.appointment_at
-        for booking in db.query(models.Booking).filter(
-            models.Booking.doctor_id == doctor_id,
-            models.Booking.status.in_(["new", "confirmed"]),
-            models.Booking.appointment_at >= start,
-            models.Booking.appointment_at < start + timedelta(days=1),
-        ).all()
-        if booking.appointment_at
-    }
-    return [schemas.DoctorSlot(starts_at=slot, available=slot not in booked) for slot in slots]
+    if not doctor.clinic_has_online_booking:
+        return []
+    clinic_tz = ZoneInfo("Asia/Almaty")
+    start = datetime.combine(selected_date, datetime.min.time(), tzinfo=clinic_tz)
+    end = start + timedelta(days=1)
+    slots = db.query(models.DoctorAvailability).filter(
+        models.DoctorAvailability.doctor_id == doctor_id,
+        models.DoctorAvailability.starts_at >= start.astimezone(timezone.utc).replace(tzinfo=None),
+        models.DoctorAvailability.starts_at < end.astimezone(timezone.utc).replace(tzinfo=None),
+        models.DoctorAvailability.starts_at > datetime.now(timezone.utc).replace(tzinfo=None),
+        models.DoctorAvailability.is_available.is_(True),
+    ).order_by(models.DoctorAvailability.starts_at).all()
+    return [schemas.DoctorSlot(starts_at=slot.starts_at.replace(tzinfo=timezone.utc)) for slot in slots]
+
+
+@app.post("/api/admin/doctors/{doctor_id}/slots", response_model=schemas.DoctorSlot, status_code=201)
+def publish_doctor_slot(
+    doctor_id: str,
+    payload: schemas.DoctorSlotCreate,
+    x_admin_key: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    if not ADMIN_API_KEY or not x_admin_key or not hmac.compare_digest(x_admin_key, ADMIN_API_KEY):
+        raise HTTPException(status_code=403, detail="Требуется ключ администратора")
+    doctor = db.get(models.Doctor, doctor_id)
+    if not doctor or not doctor.clinic_has_online_booking:
+        raise HTTPException(status_code=400, detail="Клиника не подключила онлайн-запись")
+    if payload.starts_at.tzinfo is None:
+        raise HTTPException(status_code=422, detail="Укажите время с часовым поясом")
+    starts_at = payload.starts_at.astimezone(timezone.utc).replace(tzinfo=None)
+    if starts_at <= datetime.now(timezone.utc).replace(tzinfo=None):
+        raise HTTPException(status_code=400, detail="Слот должен быть в будущем")
+    db.add(models.DoctorAvailability(doctor_id=doctor_id, starts_at=starts_at))
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Слот уже опубликован") from exc
+    return schemas.DoctorSlot(starts_at=starts_at.replace(tzinfo=timezone.utc))
 
 
 @app.get("/api/bookings/me", response_model=List[schemas.BookingResponse])
@@ -585,6 +665,8 @@ def create_booking(
     clinic = db.query(models.Clinic).filter(models.Clinic.id == booking.clinic_id).first()
     if not clinic:
         raise HTTPException(status_code=404, detail="Clinic not found")
+    if not clinic.has_online_booking:
+        raise HTTPException(status_code=409, detail="Клиника пока не подключила онлайн-запись. Запишитесь на официальном сайте клиники.")
     if not booking.name.strip() or not booking.phone.strip():
         raise HTTPException(status_code=422, detail="Укажите имя и телефон")
     doctor = None
@@ -600,21 +682,22 @@ def create_booking(
         appointment_at = appointment_at.astimezone(timezone.utc).replace(tzinfo=None)
     if appointment_at and appointment_at <= datetime.now(timezone.utc).replace(tzinfo=None):
         raise HTTPException(status_code=400, detail="Выберите будущий слот")
-    if appointment_at:
-        occupied = db.query(models.Booking).filter(
-            models.Booking.clinic_id == booking.clinic_id,
-            models.Booking.doctor_id == booking.doctor_id,
-            models.Booking.appointment_at == appointment_at,
-            models.Booking.status.in_(["new", "confirmed"]),
-        ).first()
-        if occupied:
-            raise HTTPException(status_code=409, detail="Этот слот уже занят")
+    if not doctor or not appointment_at:
+        raise HTTPException(status_code=422, detail="Выберите врача и опубликованный клиникой слот")
+    reserved = db.execute(update(models.DoctorAvailability).where(
+        models.DoctorAvailability.doctor_id == doctor.id,
+        models.DoctorAvailability.starts_at == appointment_at,
+        models.DoctorAvailability.is_available.is_(True),
+    ).values(is_available=False))
+    if reserved.rowcount != 1:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Этот слот не опубликован или уже занят")
 
     base_amount = float(doctor.consultation_price or 0) if doctor else 0
     discount = 0.0
     promo = None
     if booking.promo_code:
-        promo = _active_promo(booking.promo_code, booking.clinic_id, db)
+        promo = _active_promo(booking.promo_code, booking.clinic_id, db, for_update=True)
         discount = _promo_amount(promo, base_amount)
 
     created = models.Booking(
@@ -699,8 +782,11 @@ def get_my_plan(current_user: models.User = Depends(get_current_user)):
 def update_my_plan(
     payload: schemas.PlanUpdate,
     current_user: models.User = Depends(get_current_user),
+    x_admin_key: Optional[str] = Header(default=None),
     db: Session = Depends(get_db),
 ):
+    if not ADMIN_API_KEY or not x_admin_key or not hmac.compare_digest(x_admin_key, ADMIN_API_KEY):
+        raise HTTPException(status_code=403, detail="Тариф изменяется только после подтверждения оплаты администратором")
     current_user.plan = payload.plan
     db.commit()
     db.refresh(current_user)
@@ -733,7 +819,7 @@ def read_clinic_reviews(clinic_id: str, db: Session = Depends(get_db)):
 @app.post("/api/reviews", response_model=schemas.ReviewResponse, status_code=status.HTTP_201_CREATED)
 def create_review(
     review: schemas.ReviewCreate,
-    current_user: Optional[models.User] = Depends(get_optional_current_user),
+    current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     if bool(review.doctor_id) == bool(review.clinic_id):
@@ -742,8 +828,15 @@ def create_review(
         raise HTTPException(status_code=404, detail="Doctor not found")
     if review.clinic_id and not db.query(models.Clinic).filter(models.Clinic.id == review.clinic_id).first():
         raise HTTPException(status_code=404, detail="Clinic not found")
+    previous = db.query(models.Review).filter(
+        models.Review.user_id == current_user.id,
+        models.Review.doctor_id == review.doctor_id,
+        models.Review.clinic_id == review.clinic_id,
+    ).first()
+    if previous:
+        raise HTTPException(status_code=409, detail="Вы уже оставили отзыв")
     created = models.Review(
-        user_id=current_user.id if current_user else None,
+        user_id=current_user.id,
         doctor_id=review.doctor_id,
         clinic_id=review.clinic_id,
         rating=review.rating,

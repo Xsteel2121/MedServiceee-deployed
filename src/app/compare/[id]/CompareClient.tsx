@@ -1,9 +1,5 @@
 "use client"
 
-export function generateStaticParams() {
-  return Array.from({ length: 100 }, (_, index) => ({ id: String(index + 1) }));
-}
-
 import { startTransition, useState, useEffect } from "react"
 import Image from "next/image"
 import Link from "next/link"
@@ -575,9 +571,9 @@ export default function ComparePage() {
                 <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-6">
                   <CheckCircle2 className="w-10 h-10 text-green-600" />
                 </div>
-                <h2 className="text-2xl font-bold mb-2">Заявка отправлена!</h2>
+                <h2 className="text-2xl font-bold mb-2">Заявка сохранена</h2>
                 <p className="text-muted-foreground mb-8">
-                  Мы передали ваши данные в клинику <strong>{selectedClinic}</strong>. Оператор свяжется с вами в течение 5 минут для подтверждения времени.
+                  Запрос на приём в <strong>{selectedClinic}</strong> сохранён. Время не подтверждено клиникой; пожалуйста, уточните запись по её официальному телефону.
                 </p>
                 <Button className="w-full" onClick={() => setSelectedClinic(null)}>Понятно, спасибо</Button>
               </div>

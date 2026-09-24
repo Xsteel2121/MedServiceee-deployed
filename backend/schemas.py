@@ -27,7 +27,7 @@ class ClinicBase(BaseModel):
     longitude: Optional[float] = None
     rating: Optional[float] = 0.0
     reviews_count: Optional[int] = 0
-    has_online_booking: bool = True
+    has_online_booking: bool = False
     has_active_promotion: bool = False
 
 class BookingCreate(BaseModel):
@@ -69,13 +69,15 @@ class DoctorBase(BaseModel):
     first_name: str
     last_name: str
     specialty: str
-    experience_years: int
+    experience_years: Optional[int] = None
     rating: float = 0.0
     reviews_count: int = 0
-    consultation_price: float
+    consultation_price: Optional[float] = None
     photo_url: Optional[str] = None
-    languages: List[str] = []
+    languages: List[str] = Field(default_factory=list)
     description: Optional[str] = None
+    source_url: Optional[str] = None
+    clinic_has_online_booking: bool = False
 
     @field_validator("languages", mode="before")
     @classmethod
@@ -203,6 +205,10 @@ class DoctorSlot(BaseModel):
     available: bool = True
 
 
+class DoctorSlotCreate(BaseModel):
+    starts_at: datetime
+
+
 class PromoCodeValidate(BaseModel):
     code: str = Field(min_length=2, max_length=32)
     amount: float = Field(ge=0)
@@ -216,6 +222,29 @@ class PromoCodeResponse(BaseModel):
     discount_amount: float
     total_amount: float
     expires_at: Optional[datetime] = None
+
+
+class PublicPromotion(BaseModel):
+    code: str
+    title: str
+    description: str
+    clinic_name: str
+    city: str
+    expires_at: Optional[datetime] = None
+    source_url: str
+
+
+class PromoCodeCreate(BaseModel):
+    code: str = Field(min_length=2, max_length=32)
+    discount_type: str = Field(pattern="^(percent|fixed)$")
+    discount_value: float = Field(gt=0)
+    usage_limit: Optional[int] = Field(default=None, gt=0)
+    starts_at: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
+    clinic_id: str
+    title: str = Field(min_length=4, max_length=255)
+    description: str = Field(min_length=4, max_length=2000)
+    source_url: str = Field(pattern="^https://")
 
 
 class PlanResponse(BaseModel):

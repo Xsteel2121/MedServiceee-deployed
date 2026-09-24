@@ -20,8 +20,10 @@ interface RecommendedDoctor {
   specialty: string;
   clinic_id: string;
   clinic_name?: string | null;
-  price: number;
+  price: number | null;
   rating?: number | null;
+  source_url?: string | null;
+  clinic_has_online_booking?: boolean;
 }
 
 export function AIChatWidget() {
@@ -31,7 +33,7 @@ export function AIChatWidget() {
     {
       id: "1",
       role: "assistant",
-      content: "Сәлеметсіз бе! Мен сіздің AI-көмекшіңізбін 🤖\n\nСізге ең жақсы клиника мен дәрігерді тауып бере аламын. Сұрағыңызды қоя беріңіз:\n\nМысалы:\n- *Какое УЗИ самое лучшее по цене и качеству в Алматы?*\n- *Где принимает врач Абишев?*\n- *Қай клиникада қан тапсыру арзан?*"
+      content: ""
     }
   ]);
   const [input, setInput] = useState("");
@@ -195,7 +197,7 @@ export function AIChatWidget() {
                     {msg.role === 'user' ? <User className="w-4 h-4" /> : <Bot className="w-4 h-4" />}
                   </div>
                   <div className={`px-4 py-3 rounded-2xl text-sm ${msg.role === 'user' ? 'bg-primary text-white rounded-tr-sm' : 'bg-white shadow-sm border border-black/5 rounded-tl-sm text-foreground'}`}>
-                    {renderMessageContent(msg.content)}
+                    {renderMessageContent(msg.id === "1" ? (locale === "kk" ? "Сәлеметсіз бе! Клиника мен дәрігер туралы сұраңыз. Медициналық кеңес диагноз болып табылмайды." : "Здравствуйте! Спросите о клинике или враче. Медицинская информация не является диагнозом.") : msg.content)}
                   </div>
                 </div>
               ))}
@@ -208,9 +210,9 @@ export function AIChatWidget() {
                         <div>
                           <p className="font-semibold text-sm">{doctor.name}</p>
                           <p className="text-xs text-primary">{doctor.specialty}</p>
-                          <p className="text-xs text-muted-foreground">{doctor.clinic_name || "Клиника"} · {doctor.price.toLocaleString("ru-RU")} ₸ · ★ {doctor.rating ?? "—"}</p>
+                          <p className="text-xs text-muted-foreground">{doctor.clinic_name || "Клиника"} · {doctor.price != null ? `${doctor.price.toLocaleString("ru-RU")} ₸` : "Цена по запросу"} · ★ {doctor.rating ?? "—"}</p>
                         </div>
-                        <a href={`/clinics/${encodeURIComponent(doctor.clinic_id)}`} className="shrink-0 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-white hover:bg-primary/90 transition-colors">
+                        <a href={doctor.clinic_has_online_booking ? `/clinics/${encodeURIComponent(doctor.clinic_id)}` : doctor.source_url || `/clinics/${encodeURIComponent(doctor.clinic_id)}`} target={doctor.clinic_has_online_booking ? undefined : "_blank"} rel={doctor.clinic_has_online_booking ? undefined : "noopener noreferrer"} className="shrink-0 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-white hover:bg-primary/90 transition-colors">
                           {locale === "kk" ? "Жазылу" : "Записаться"}
                         </a>
                       </div>
@@ -224,7 +226,7 @@ export function AIChatWidget() {
                     <Bot className="w-4 h-4" />
                   </div>
                   <div className="px-4 py-3 rounded-2xl text-sm bg-white shadow-sm border border-black/5 rounded-tl-sm text-foreground flex items-center gap-2">
-                    <Loader2 className="w-4 h-4 animate-spin text-primary" /> AI думает...
+                    <Loader2 className="w-4 h-4 animate-spin text-primary" /> {locale === "kk" ? "Жауап дайындалуда..." : "Готовлю ответ..."}
                   </div>
                 </div>
               )}
@@ -237,7 +239,7 @@ export function AIChatWidget() {
                 <Input
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
-                  placeholder="Спросите что-нибудь..."
+                  placeholder={locale === "kk" ? "Сұрағыңызды жазыңыз..." : "Спросите что-нибудь..."}
                   className="flex-1 bg-black/5 border-none focus-visible:ring-1 focus-visible:ring-primary"
                 />
                 <Button type="submit" size="icon" disabled={!input.trim() || isLoading} className="shrink-0">

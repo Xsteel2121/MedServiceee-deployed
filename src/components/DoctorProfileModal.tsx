@@ -59,7 +59,7 @@ export function DoctorProfileModal({ doctor, isOpen, onClose }: DoctorModalProps
         credentials: "include",
         body: JSON.stringify({ doctor_id: doctor?.id, rating: reviewRating, comment: reviewComment.trim() || undefined }),
       });
-      if (!response.ok) throw new Error("Не удалось отправить отзыв");
+      if (!response.ok) throw new Error(response.status === 401 ? "Войдите в аккаунт, чтобы оставить отзыв" : "Не удалось отправить отзыв");
       setReviewStatus("Спасибо за отзыв");
       setReviewComment("");
     } catch (error: unknown) {
@@ -95,12 +95,12 @@ export function DoctorProfileModal({ doctor, isOpen, onClose }: DoctorModalProps
             <div className="bg-black/5 p-4 rounded-2xl text-center">
               <Award className="w-6 h-6 mx-auto mb-2 text-primary" />
               <p className="text-xs text-muted-foreground mb-1">Стаж работы</p>
-              <p className="font-bold">{doctor.experience_years} лет</p>
+              <p className="font-bold">{doctor.experience_years != null ? `${doctor.experience_years} лет` : "Уточняйте"}</p>
             </div>
             <div className="bg-black/5 p-4 rounded-2xl text-center">
               <Clock className="w-6 h-6 mx-auto mb-2 text-primary" />
               <p className="text-xs text-muted-foreground mb-1">Стоимость приема</p>
-              <p className="font-bold">{(doctor.consultation_price || doctor.price || 0).toLocaleString('ru-RU')} ₸</p>
+              <p className="font-bold">{doctor.consultation_price != null || doctor.price != null ? `${(doctor.consultation_price ?? doctor.price ?? 0).toLocaleString('ru-RU')} ₸` : "Уточняйте"}</p>
             </div>
           </div>
 
@@ -166,7 +166,7 @@ export function DoctorProfileModal({ doctor, isOpen, onClose }: DoctorModalProps
                   value={formData.time}
                   onChange={e => setFormData({...formData, time: e.target.value})}
                 >
-                  <option value="">Выберите время</option>
+                  <option value="">{slots.length ? "Выберите время" : "Нет подтверждённых слотов"}</option>
                   {slots.map((slot) => <option key={slot.starts_at} value={slot.starts_at}>{new Date(slot.starts_at).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}</option>)}
                 </select>
               </div>
@@ -174,7 +174,7 @@ export function DoctorProfileModal({ doctor, isOpen, onClose }: DoctorModalProps
                 <label className="text-sm font-semibold text-muted-foreground mb-1 block">Промокод</label>
                 <input
                   type="text"
-                  placeholder="WELCOME10"
+                  placeholder="Промокод"
                   className="w-full h-12 px-4 rounded-xl border border-black/10 bg-black/5 focus:bg-white focus:ring-2 focus:ring-primary focus:outline-none transition-all"
                   value={formData.promo_code}
                   onChange={e => setFormData({...formData, promo_code: e.target.value.toUpperCase()})}
@@ -187,6 +187,10 @@ export function DoctorProfileModal({ doctor, isOpen, onClose }: DoctorModalProps
           <Button 
             className={`w-full h-14 text-lg transition-all ${isBooked ? 'bg-green-500 hover:bg-green-600 text-white' : ''}`}
             onClick={() => {
+              if (doctor.clinic_has_online_booking === false) {
+                if (doctor.source_url) window.open(doctor.source_url, "_blank", "noopener,noreferrer");
+                return;
+              }
               if (!showForm && !isBooked) {
                 const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
                 setFormData((prev) => ({ ...prev, date: prev.date || tomorrow }));
@@ -218,7 +222,7 @@ export function DoctorProfileModal({ doctor, isOpen, onClose }: DoctorModalProps
                   .finally(() => setBookingLoading(false));
               }
             }}
-            disabled={isBooked || bookingLoading || (showForm && (!formData.name || !formData.phone || !formData.time || !doctor.clinic_id))}
+            disabled={isBooked || bookingLoading || (doctor.clinic_has_online_booking === false && !doctor.source_url) || (showForm && (!formData.name || !formData.phone || !formData.time || !doctor.clinic_id))}
           >
             {isBooked ? (
               <span className="flex items-center justify-center gap-2">
@@ -227,7 +231,7 @@ export function DoctorProfileModal({ doctor, isOpen, onClose }: DoctorModalProps
             ) : showForm ? (
               "Отправить заявку"
             ) : (
-              "Записаться на прием"
+              doctor.clinic_has_online_booking === false ? "Записаться на сайте клиники" : "Записаться на прием"
             )}
           </Button>
         </div>

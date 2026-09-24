@@ -1,7 +1,7 @@
 import uuid
 import datetime
 import json
-from sqlalchemy import Boolean, Column, String, Float, DateTime, Enum as SQLAlchemyEnum, Numeric, Integer, ForeignKey, Text
+from sqlalchemy import Boolean, Column, String, Float, DateTime, Enum as SQLAlchemyEnum, Numeric, Integer, ForeignKey, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 import enum
@@ -36,7 +36,7 @@ class Clinic(Base):
     longitude = Column(Float, nullable=True)
     rating = Column(Float, default=0.0)
     reviews_count = Column(Integer, default=0)
-    has_online_booking = Column(Boolean, default=True)
+    has_online_booking = Column(Boolean, default=False)
     has_active_promotion = Column(Boolean, default=False, index=True)
 
     prices = relationship("Price", back_populates="clinic")
@@ -56,10 +56,27 @@ class Doctor(Base):
     reviews_count = Column(Integer, default=0)
     consultation_price = Column(Numeric(10, 2))
     photo_url = Column(String, nullable=True)
-    languages = Column(Text, default="ru,kk")
+    languages = Column(Text, nullable=True)
     description = Column(String, nullable=True)
+    source_url = Column(String, nullable=True)
 
     clinic = relationship("Clinic", back_populates="doctors")
+
+    @property
+    def clinic_has_online_booking(self):
+        return bool(self.clinic and self.clinic.has_online_booking)
+
+
+class DoctorAvailability(Base):
+    """Slots supplied by an authorised clinic operator, never generated."""
+
+    __tablename__ = "doctor_availability"
+    __table_args__ = (UniqueConstraint("doctor_id", "starts_at", name="uq_doctor_slot"),)
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    doctor_id = Column(String, ForeignKey("doctors.id"), nullable=False, index=True)
+    starts_at = Column(DateTime, nullable=False, index=True)  # naive UTC
+    is_available = Column(Boolean, default=True, nullable=False)
 
 class Service(Base):
     __tablename__ = "services"
@@ -79,6 +96,8 @@ class Price(Base):
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
     clinic_id = Column(String, ForeignKey("clinics.id"))
     service_id = Column(String, ForeignKey("services.id"))
+    doctor_id = Column(String, ForeignKey("doctors.id"), nullable=True)
+    source_url = Column(String, nullable=True)
     
     price_kzt = Column(Numeric(10, 2))
     currency = Column(SQLAlchemyEnum(CurrencyEnum), default=CurrencyEnum.KZT)
@@ -88,6 +107,7 @@ class Price(Base):
 
     clinic = relationship("Clinic", back_populates="prices")
     service = relationship("Service", back_populates="prices")
+    doctor = relationship("Doctor")
     history = relationship("PriceHistory", back_populates="price_parent")
 
 class PriceHistory(Base):
@@ -180,6 +200,9 @@ class PromoCode(Base):
     expires_at = Column(DateTime, nullable=True)
     clinic_id = Column(String, ForeignKey("clinics.id"), nullable=True, index=True)
     is_active = Column(Boolean, default=True, nullable=False)
+    title = Column(String, nullable=True)
+    description = Column(Text, nullable=True)
+    source_url = Column(String, nullable=True)
 
     clinic = relationship("Clinic")
 
