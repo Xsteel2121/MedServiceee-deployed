@@ -50,11 +50,14 @@ ADDITIVE_COLUMNS = {
 def ensure_schema() -> None:
     """Create missing tables and add missing columns without dropping data."""
 
-    Base.metadata.create_all(bind=engine)
-    inspector = inspect(engine)
     dialect = engine.dialect.name
 
     with engine.begin() as connection:
+        if dialect == "postgresql":
+            # Multiple Vercel cold starts can initialize the database together.
+            connection.execute(text("SELECT pg_advisory_xact_lock(43852765)"))
+        Base.metadata.create_all(bind=connection)
+        inspector = inspect(connection)
         for table_name, columns in ADDITIVE_COLUMNS.items():
             if table_name not in inspector.get_table_names():
                 continue
@@ -69,11 +72,6 @@ def ensure_schema() -> None:
                 table_sql = f'"{table_name}"'
                 column_sql = f'"{column_name}"'
                 connection.execute(text(f"ALTER TABLE {table_sql} ADD COLUMN {column_sql} {column_type}"))
-
-    # ``dialect`` is intentionally read above so a future dialect-specific
-    # migration can be added without changing the application entry point.
-    _ = dialect
-
 
 if __name__ == "__main__":
     ensure_schema()

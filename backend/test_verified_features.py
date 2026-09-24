@@ -65,6 +65,22 @@ class VerifiedFeaturesTest(unittest.TestCase):
         self.assertEqual(booking.status_code, 409)
         self.assertEqual(self.request("GET", "/api/promocodes/public").json(), [])
 
+    def test_kazakh_triage_and_free_ai_limit(self):
+        headers = {"X-AI-Session": "test-kazakh-triage-session"}
+        first = self.request("POST", "/api/chat", headers=headers, json={"message": "Құлағым ауырып тұр"})
+        self.assertEqual(first.status_code, 200, first.text)
+        self.assertEqual(first.json()["language"], "kz")
+        self.assertTrue(first.json()["triage"]["disclaimer"])
+        self.assertTrue(any(
+            doctor["source_url"] == "https://emirmed.kz/ru/specialists/859/"
+            for doctor in first.json()["recommended_doctors"]
+        ))
+        for _ in range(19):
+            self.assertEqual(self.request("POST", "/api/chat", headers=headers, json={"message": "Сәлем"}).status_code, 200)
+        exhausted = self.request("POST", "/api/chat", headers=headers, json={"message": "Сәлем"})
+        self.assertEqual(exhausted.status_code, 429)
+        self.assertTrue(exhausted.json()["detail"]["upgrade_required"])
+
     def test_auth_reviews_and_paid_plan_guard(self):
         registered = self.request("POST", "/api/auth/register", json={
             "email": "patient@example.test", "password": "StrongPass123!", "full_name": "Test Patient",
